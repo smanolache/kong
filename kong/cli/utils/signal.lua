@@ -95,7 +95,7 @@ local function prepare_nginx_working_dir(args_config)
     kong_config.memory_cache_size = 128 -- Default value
     cutils.logger:warn("Setting \"memory_cache_size\" to default 128MB")
   end
-  
+
   -- Extract nginx config from kong config, replace any needed value
   local nginx_config = kong_config.nginx
   local nginx_inject = {
@@ -129,7 +129,6 @@ local function prepare_nginx_working_dir(args_config)
   end
 
   -- Inject anonymous reports
-  local KONG_SYSLOG = "kong-hf.mashape.com"
   if kong_config.send_anonymous_reports then
     -- If there is no internet connection, disable this feature
     if socket.dns.toip(constants.SYSLOG.ADDRESS) then
@@ -184,7 +183,7 @@ local function stop_dnsmasq(kong_config)
 end
 
 local function start_dnsmasq(kong_config)
-  local cmd = IO.cmd_exists("dnsmasq") and "dnsmasq" or 
+  local cmd = IO.cmd_exists("dnsmasq") and "dnsmasq" or
                 (IO.cmd_exists("/usr/local/sbin/dnsmasq") and "/usr/local/sbin/dnsmasq" or nil) -- On OS X dnsmasq is at /usr/local/sbin/
   if not cmd then
     cutils.logger:error_exit("Can't find dnsmasq")
@@ -241,7 +240,7 @@ function _M.prepare_kong(args_config, signal)
     local ports = { kong_config.proxy_port, kong_config.admin_api_port, kong_config.dnsmasq_port }
     for _,port in ipairs(ports) do
       if cutils.is_port_open(port) then
-        cutils.logger:error_exit("Port "..tostring(port).." is already being used by another process.")  
+        cutils.logger:error_exit("Port "..tostring(port).." is already being used by another process.")
       end
     end
   end
