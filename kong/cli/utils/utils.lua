@@ -120,6 +120,8 @@ local function get_kong_config_path(args_config)
     logger:error_exit("Could not find a configuration file.")
   end
 
+  logger:info("Using configuration: "..config_path)
+
   return config_path
 end
 
@@ -136,6 +138,7 @@ end
 return {
   colors = colors,
   logger = logger,
+  properties_to_string = properties_to_string,
   get_kong_infos = get_kong_infos,
   get_kong_config_path = get_kong_config_path,
   get_luarocks_install_dir = get_luarocks_install_dir,
