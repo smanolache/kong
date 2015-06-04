@@ -16,7 +16,7 @@ local function send_ping(premature)
   local lock = lock:new("locks", {
     exptime = INTERVAL - 0.001
   })
-  local elapsed, err = lock:lock("ping")
+  local elapsed = lock:lock("ping")
   if elapsed and elapsed == 0 then
     syslog.log({signal = "ping"})
   end
