@@ -112,6 +112,13 @@ local function init_plugins()
     handler = require("kong.resolver.handler")()
   })
 
+  if configuration.send_anonymous_reports then
+    table.insert(result, {
+      name = "reports",
+      handler = require("kong.reports.handler")()
+    })
+  end
+
   -- Add the plugins in a sorted order
   for _, v in utils.sort_table_iter(unsorted_plugins, utils.sort.descending) do -- In descending order
     if v then
@@ -148,6 +155,13 @@ function _M.init()
 
   -- Initializing plugins
   plugins = init_plugins()
+end
+
+function _M.exec_plugins_init_worker()
+   -- Calling the Init handler
+  for _, plugin in ipairs(plugins) do
+    plugin.handler:init_worker()
+  end
 end
 
 function _M.exec_plugins_certificate()
