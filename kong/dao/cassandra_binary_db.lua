@@ -396,7 +396,7 @@ function CassBinaryDB:new(options)
 	 prepare     = true,
 	 consistency = options.consistency and options.consistency or db.CL.ONE,
 	 auto_paging = options.auto_paging or false,
-	 page_size   = options.page_size or 50,
+	 page_size   = options.page_size,
 	 keyspace    = options.keyspace or "kong"
       },
       ssl_options = {
@@ -912,8 +912,14 @@ local function prepare(sess, query)
 end
 
 local function attempt_stmt_execution(sess, stmt, opts, paging_state)
-   if paging_state and "" ~= paging_state then
-      local rc = stmt:set_paging_state_token(paging_state, opts.page_size or 50)
+   if opts.page_size then
+      local rc = stmt:set_paging_size(opts.page_size)
+      if 0 ~= rc then
+	 return nil, db.cass_error_desc(rc)
+      end
+   end
+   if paging_state then
+      local rc = stmt:set_paging_state_token(paging_state)
       if 0 ~= rc then
 	 return nil, db.cass_error_desc(rc)
       end
@@ -1032,11 +1038,10 @@ local function page_iterator(state)
 	    return nil, nil
 	 end
 	 local rc
-	 rc, ps = previous_result:paging_state_token()
+	 rc, paging_state = previous_result:paging_state_token()
 	 if 0 ~= rc then
 	    return nil, db.cass_error_desc(rc), page
 	 end
-	 paging_state = ps
       end
       page = page + 1
       local r, err = full_query_impl(state.sess, state.query, state.args, state.opts, paging_state)
@@ -1170,14 +1175,20 @@ local function find_page_impl(sess, opts, table_name, tbl, paging_state, schema)
       return nil, err, nil
    end
 
-   local rc, ps = result:paging_state_token()
-   if 0 ~= rc then
-      return nil, db.cass_error_desc(rc), nil
+   local ps = nil
+   if result:has_more_pages() then
+      local rc
+      rc, ps = result:paging_state_token()
+      if 0 ~= rc then
+	 return nil, db.cass_error_desc(rc), nil
+      end
    end
 
-   paging_state = ps
-
-   return result_to_table(result, schema)
+   local r, e = result_to_table(result, schema)
+   if e then
+      return nil, e, nil
+   end
+   return r, e, ps
 end
 
 function CassBinaryDB:find_page(table_name, tbl, paging_state, page_size, schema)
