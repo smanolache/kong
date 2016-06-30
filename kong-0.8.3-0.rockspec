@@ -112,11 +112,13 @@ build = {
     ["kong.dao.schemas.plugins"] = "kong/dao/schemas/plugins.lua",
     ["kong.dao.base_db"] = "kong/dao/base_db.lua",
     ["kong.dao.cassandra_db"] = "kong/dao/cassandra_db.lua",
+    ["kong.dao.cassandra_binary_db"] = "kong/dao/cassandra_binary_db.lua",
     ["kong.dao.postgres_db"] = "kong/dao/postgres_db.lua",
     ["kong.dao.dao"] = "kong/dao/dao.lua",
     ["kong.dao.factory"] = "kong/dao/factory.lua",
     ["kong.dao.model_factory"] = "kong/dao/model_factory.lua",
     ["kong.dao.migrations.cassandra"] = "kong/dao/migrations/cassandra.lua",
+    ["kong.dao.migrations.cassandra_binary"] = "kong/dao/migrations/cassandra_binary.lua",
     ["kong.dao.migrations.postgres"] = "kong/dao/migrations/postgres.lua",
 
     ["kong.plugins.base_plugin"] = "kong/plugins/base_plugin.lua",

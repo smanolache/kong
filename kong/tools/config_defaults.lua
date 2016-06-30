@@ -34,7 +34,7 @@ return {
       ["ttl_on_failure"] = {type = "number", default = 3600, min = 60}
     }
   },
-  ["database"] = {type = "string", default = "cassandra", enum = {"cassandra", "postgres"}},
+  ["database"] = {type = "string", default = "cassandra", enum = {"cassandra", "postgres", "cassandra_binary"}},
   ["postgres"] = {
     type = "table",
     content = {
@@ -49,6 +49,30 @@ return {
     type = "table",
     content = {
       ["contact_points"] = {type = "array", default = {"127.0.0.1:9042"}},
+      ["port"] = {type = "number", default = 9042},
+      ["keyspace"] = {type = "string", default = "kong"},
+      ["timeout"] = {type = "number", default = 5000},
+      ["replication_strategy"] = {type = "string", default = "SimpleStrategy", enum = {"SimpleStrategy", "NetworkTopologyStrategy"}},
+      ["replication_factor"] = {type = "number", default = 1},
+      ["data_centers"] = {type = "table", default = {}},
+      ["username"] = {type = "string", nullable = true},
+      ["password"] = {type = "string", nullable = true},
+      ["consistency"] = {type = "string", default = "ONE", enum = {"ANY", "ONE", "TWO", "THREE", "QUORUM", "ALL", "LOCAL_QUORUM",
+                                                                   "EACH_QUORUM", "SERIAL", "LOCAL_SERIAL", "LOCAL_ONE"}},
+      ["ssl"] = {
+        type = "table",
+        content = {
+          ["enabled"] = {type = "boolean", default = false},
+          ["verify"] = {type = "boolean", default = false},
+          ["certificate_authority"] = {type = "string", nullable = true}
+        }
+      }
+    }
+  },
+  ["cassandra_binary"] = {
+    type = "table",
+    content = {
+      ["contact_points"] = {type = "array", default = {"127.0.0.1"}},
       ["port"] = {type = "number", default = 9042},
       ["keyspace"] = {type = "string", default = "kong"},
       ["timeout"] = {type = "number", default = 5000},
