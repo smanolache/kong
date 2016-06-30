@@ -6,7 +6,7 @@ local uuid = require "lua_uuid"
 
 local ngx_stub = _G.ngx
 _G.ngx = nil
-local cassandra = require "db.cassandra"
+local cassandra = require "cassandra"
 _G.ngx = ngx_stub
 
 local CassandraDB = BaseDB:extend()
@@ -40,40 +40,10 @@ function CassandraDB:new(options)
   }
 
   if options.username and options.password then
-     -- TODO
     conn_opts.auth = cassandra.auth.PlainTextProvider(options.username, options.password)
   end
 
   CassandraDB.super.new(self, "cassandra", conn_opts)
-
-  -- we should lock here
-  local cluster = get_cluster_from_global_shared_cache()
-  if nil == cluster then
-     cluster = cassandra.cass_cluster_new()
-     if nil == cluster then
-	-- TODO
-     end
-     cluster:set_port(options.port)
-     -- TODO
-     cluster:set_protocol_version(...)
-     cluster:set_contact_points(...)
-  end
-  local session = get_session_from_global_shared_cache()
-  if nil == session then
-     session = cassandra.cass_session_new()
-     if nil == session then
-	-- TODO
-     end
-     local future = session:connect_keyspace(cluster, options.keyspace)
-     future:wait()
-     local rc = future:error_code()
-     if 0 ~= rc then
-	-- TODO
-     end
-  end
-  -- unlock
-  self.cluster = cluster
-  self.session = session
 end
 
 function CassandraDB:infos()
@@ -87,20 +57,13 @@ end
 
 local function serialize_arg(field, value)
   if value == nil then
-     -- TODO
-     -- returns {value = "unset", type_id = "unset" }
     return cassandra.unset
   elseif field.type == "id" then
-     -- TODO
-     -- returns {value = value, type_id = 0x0c }
     return cassandra.uuid(value)
   elseif field.type == "timestamp" then
-     -- TODO
-     -- returns {value = value, type_id = 0x0b }
     return cassandra.timestamp(value)
   elseif field.type == "table" or field.type == "array" then
     local json = require "cjson"
-    -- returns a string
     return json.encode(value)
   else
     return value
@@ -195,419 +158,6 @@ local function check_foreign_constaints(self, values, constraints)
   return Errors.foreign(errors)
 end
 
-function CassandraDB:page_iterator(query, args, query_options)
-   local page = 0
-
-   return function(db, previous_rows)
-      if previous_rows and previous_rows.meta.has_more_pages == false then
-	 return nil -- End iteration after error
-      end
-
-      query_options.paging_state = previous_rows and previous_rows.meta.paging_state
-
-      local rows, err = db:inner_execute(query, args, query_options)
-
-      -- If we have some results, increment the page
-      if rows ~= nil and #rows > 0 then
-	 page = page + 1
-      else
-	 if err then
-	    -- Just expose the error with 1 last iteration
-	    return {meta = {has_more_pages = false}}, err, page
-	 elseif rows.meta.has_more_pages == false then
-	    return nil -- End of the iteration
-	 end
-      end
-
-      return rows, err, page
-   end, self, nil
-end
-
-local function read_value(value, value_type)
-   local elem = nil
-   if nil == value or value:is_null() then
-      elem = nil
-   elseif cassandra.TYPES.VALUE_TYPE_ASCII == value_type or
-      cassandra.TYPES.VALUE_TYPE_TEXT == value_type or
-      cassandra.TYPES.VALUE_TYPE_VARCHAR == value_type
-   then
-      local rc
-      rc, elem = value:get_string()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_BIGINT == value_type or
-      cassandra.TYPES.VALUE_TYPE_COUNTER == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIMESTAMP == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIME == value_type
-   then
-      local rc
-      rc, elem = value:get_int64()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_BLOB == value_type or
-      cassandra.TYPES.VALUE_TYPE_VARINT == value_type
-   then
-      local rc
-      rc, elem = value:get_bytes()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_BOOLEAN == value_type then
-      local rc
-      rc, elem = value:get_bool()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_DATE == value_type then
-      local rc
-      rc, elem = value:get_uint32()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_DECIMAL == value_type then
-      local rc
-      rc, elem = value:get_decimal()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_DOUBLE == value_type then
-      local rc
-      rc, elem = value:get_double()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_FLOAT == value_type then
-      local rc
-      rc, elem = value:get_float()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_INET == value_type then
-      local rc
-      rc, elem = value:get_inet()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_INT == value_type then
-      local rc
-      rc, elem = value:get_int32()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_TINYINT == value_type then
-      local rc
-      rc, elem = value:get_int8()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_SMALLINT == value_type then
-      local rc
-      rc, elem = value:get_int16()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_UUID == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIMEUUID == value_type
-   then
-      local rc
-      rc, elem = value:get_uuid()
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   elseif cassandra.TYPES.VALUE_TYPE_LIST == value_type or
-      cassandra.TYPES.VALUE_TYPE_SET == value_type
-   then
-      local it = value:iterator_from_collection()
-      local s = {}
-      while it:next() do
-	 local val = it:get_value()
-	 if nil == val then
-	    -- TODO
-	 end
-	 local v, err = read_value(val, val:type())
-	 if err then
-	    return nil, err
-	 end
-	 s[#s + 1] = v
-      end
-      elem = s
-   elseif cassandra.TYPES.VALUE_TYPE_MAP == value_type then
-      local it = value:iterator_from_collection()
-      local s = {}
-      while it:next() do
-	 local val = it:get_value()
-	 if nil == val then
-	    -- TODO
-	 end
-	 local k, err = read_value(val, val:type())
-	 if err then
-	    return nil, err
-	 end
-	 if not it:next() then
-	    -- TODO
-	 end
-	 val = it:get_value()
-	 if nil == val then
-	    -- TODO
-	 end
-	 local v
-	 v, err = read_value(val, val:type())
-	 if err then
-	    return nil, err
-	 end
-	 s[k] = v
-      end
-      elem = s
-   elseif cassandra.TYPES.VALUE_TYPE_UDT == value_type then
-      local it = value:iterator_fields_from_user_type()
-      local s = {}
-      while it:next() do
-	 local rc, name = it:get_user_type_field_name()
-	 if 0 ~= rc then
-	    return nil, cassandra.cass_error_desc(rc)
-	 end
-	 local val = it:get_user_type_field_value()
-	 if nil == val then
-	    -- TODO
-	 end
-	 local v, err = read_value(val, val:type())
-	 if err then
-	    return nil, err
-	 end
-	 s[name] = v
-      end
-      elem = s
-   elseif cassandra.TYPES.VALUE_TYPE_TUPLE == value_type then
-      local it = value:iterator_from_tuple()
-      local s = {}
-      while it:next() do
-	 local val = it:get_value()
-	 if nil == val then
-	    -- TODO
-	 end
-	 local v, err = read_value(val, val:type())
-	 if err then
-	    return nil, err
-	 end
-	 s[#s + 1] = v
-      end
-      elem = s
-   else
-      elem = nil
-   end
-
-   return elem, nil
-end
-
-function CassandraDB:prepare(query)
-   -- TODO lock
-   local p = get_prepared_from_global_cache(query)
-   if nil == p then
-      local future = self.session:prepare(query)
-      future:wait()
-      local rc = future:error_code()
-      if 0 ~= 0 then
-	 return nil, future:error_message()
-      end
-
-      p = future:get_prepared()
-      set_prepared_into_global_cache(query, p)
-   end
-   -- TODO unlock
-   return p, nil
-end
-
-local function bind_value_to_stmt(stmt, value, value_type, ndx)
-   if nil == value then
-      return stmt:bind_null(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_ASCII == value_type or
-      cassandra.TYPES.VALUE_TYPE_TEXT == value_type or
-      cassandra.TYPES.VALUE_TYPE_VARCHAR == value_type
-   then
-      return stmt:bind_string(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_BIGINT == value_type or
-      cassandra.TYPES.VALUE_TYPE_COUNTER == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIMESTAMP == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIME == value_type
-   then
-      return stmt:bind_int64(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_BLOB == value_type or
-      cassandra.TYPES.VALUE_TYPE_VARINT == value_type
-   then
-      return stmt:bind_bytes(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_BOOLEAN == value_type then
-      return stmt:bind_bool(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_DATE == value_type then
-      return stmt:bind_uint32(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_DECIMAL == value_type then
-      return stmt:bind_decimal(ndx, value.number, value.scale)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_DOUBLE == value_type then
-      return stmt:bind_double(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_FLOAT == value_type then
-      return stmt:bind_float(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_INET == value_type then
-      return stmt:bind_inet(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_INT == value_type then
-      return stmt:bind_int32(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_TINYINT == value_type then
-      return stmt:bind_int8(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_SMALLINT == value_type then
-      return stmt:bind_int16(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_UUID == value_type or
-      cassandra.TYPES.VALUE_TYPE_TIMEUUID == value_type
-   then
-      return stmt:bind_uuid(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_LIST == value_type or
-      cassandra.TYPES.VALUE_TYPE_SET == value_type or
-      cassandra.TYPES.VALUE_TYPE_MAP == value_type
-   then
-      return stmt:bind_collection(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_UDT == value_type then
-      return stmt:bind_user_type(ndx, value)
-   end
-
-   if cassandra.TYPES.VALUE_TYPE_TUPLE == value_type then
-      return stmt:bind_tuple(ndx, value)
-   end
-
-   return cassandra.ERRORS.LIB_INVALID_VALUE_TYPE
-end
-
-function CassandraDB:inner_execute(query, args, query_options)
-   local stmt = nil
-   if query_options.prepare then
-      local prepared, err = self:prepare(query)
-      if err then
-	 return nil, err
-      end
-
-      stmt = prepared:bind()
-      for i in 0, #args - 1 do
-	 local dt = prepared:parameter_data_type(i)
-	 if nil == dt then
-	    -- TODO
-	 end
-	 bind_value_to_stmt(stmt, args[i+1], dt:type(), i)
-      end
-   else
-      stmt = cassandra.cass_statement_new(query, 0)
-      -- TODO
-      stmt:set_keyspace(...)
-   end
-   -- TODO: query_options.consistency to cassandra.CL.consistency
-   local rc = stmt:set_consistency(query_options.consistency and query_options.consistency or cassandra.CL.ONE)
-   if 0 ~= rc then
-      return nil, cassandra.cass_error_desc(rc)
-   end
-
-   if query_options.auto_paging then
-      rc = stmt:set_paging_size(query_options.page_size and query_options.page_size or 50)
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-      rc = stmt:set_paging_state(query_options.paging_state)
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-   end
-      
-   local future = self.session:execute(stmt)
-   future:wait()
-   rc = future:error_code()
-   if 0 ~= rc then
-      return nil, future:error_message()
-   end
-
-   local result = future:get_result()
-
-   local rows = {
-      type = "ROWS"
-      meta = {
-	 has_more_pages = result:has_more_pages()
-	 paging_state = result
-      }
-   }
-
-   local column_count = result:column_count()
-   local cols = {}
-   for i = 0, column_count - 1 do
-      local col_name
-      local col_type
-      local rc
-      rc, col_name = result:column_name(i)
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-      rc, col_type = result:column_type(i)
-      if 0 ~= rc then
-	 return nil, cassandra.cass_error_desc(rc)
-      end
-      cols[i] = {name = col_name, type = col_type}
-   end
-
-   local it = result:iterator()
-   while it:next() do
-      local row = {}
-      local r = it:get_row()
-      for i = 0, column_count - 1 do
-	 local v, err = read_value(r:get_column(i), cols[i].type)
-	 if err then
-	    return nil, err
-	 end
-	 row[cols[i].name] = v
-      end
-      rows[#rows + 1] = row
-   end
-
-   return rows, nil
-end
-
-function CassandraDB:session_execute(query, args, query_options)
-   if nil == self.session then
-      return nil, "no open database session available"
-   elseif type(query) ~= "string" then
-      return nil, "query must be a string"
-   end
-
-   if query_options and query_options.auto_paging then
-      return self:page_iterator(query, args, query_options)
-   end
-
-   return self:inner_execute(query, args, query_options)
-end
-
 function CassandraDB:query(query, args, opts, schema, no_keyspace)
   CassandraDB.super.query(self, query, args)
 
@@ -615,8 +165,13 @@ function CassandraDB:query(query, args, opts, schema, no_keyspace)
   if no_keyspace then
     conn_opts.keyspace = nil
   end
+  local session, err = cassandra.spawn_session(conn_opts)
+  if err then
+    return nil, Errors.db(tostring(err))
+  end
 
-  local res, err = self:session_execute(query, args, opts)
+  local res, err = session:execute(query, args, opts)
+  session:set_keep_alive()
   if err then
     return nil, Errors.db(tostring(err))
   end
@@ -679,6 +234,12 @@ function CassandraDB:find(table_name, schema, filter_keys)
 end
 
 function CassandraDB:find_all(table_name, tbl, schema)
+  local conn_opts = self:_get_conn_options()
+  local session, err = cassandra.spawn_session(conn_opts)
+  if err then
+    return nil, Errors.db(tostring(err))
+  end
+
   local where, args
   if tbl ~= nil then
     where, args = get_where(schema, tbl)
@@ -700,6 +261,8 @@ function CassandraDB:find_all(table_name, tbl, schema)
       res_rows[#res_rows + 1] = row
     end
   end
+
+  session:set_keep_alive()
 
   return res_rows, err
 end
