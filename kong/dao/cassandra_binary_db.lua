@@ -86,7 +86,7 @@ local function init_cluster(opts)
       return nil, db.cass_error_desc(rc)
    end
 
-   rc = cluster:set_contact_points(table.concat(opts.contact_points, ";"))
+   rc = cluster:set_contact_points(table.concat(opts.contact_points, ","))
    if 0 ~= rc then
       return nil, db.cass_error_desc(rc)
    end
@@ -1593,7 +1593,7 @@ local function record_migration_impl(sess, opts, id, name)
    end
 
    return select(2, query_with_session(sess, "UPDATE schema_migrations SET migrations = migrations + ? WHERE id = ?",
-				       {set, id}, build_opts(opts, {prepare = true})))
+				       {names, id}, build_opts(opts, {prepare = true})))
 end
 
 function CassBinaryDB:record_migration(id, name)
