@@ -202,11 +202,11 @@ function CassandraDB:page_iterator(query, args, query_options)
       if previous_rows and previous_rows.meta.has_more_pages == false then
 	 return nil -- End iteration after error
       end
-      
+
       query_options.paging_state = previous_rows and previous_rows.meta.paging_state
-      
+
       local rows, err = db:inner_execute(query, args, query_options)
-      
+
       -- If we have some results, increment the page
       if rows ~= nil and #rows > 0 then
 	 page = page + 1
@@ -218,7 +218,7 @@ function CassandraDB:page_iterator(query, args, query_options)
 	    return nil -- End of the iteration
 	 end
       end
-      
+
       return rows, err, page
    end, self, nil
 end
@@ -419,6 +419,92 @@ function CassandraDB:prepare(query)
    return p, nil
 end
 
+local function bind_value_to_stmt(stmt, value, value_type, ndx)
+   if nil == value then
+      return stmt:bind_null(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_ASCII == value_type or
+      cassandra.TYPES.VALUE_TYPE_TEXT == value_type or
+      cassandra.TYPES.VALUE_TYPE_VARCHAR == value_type
+   then
+      return stmt:bind_string(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_BIGINT == value_type or
+      cassandra.TYPES.VALUE_TYPE_COUNTER == value_type or
+      cassandra.TYPES.VALUE_TYPE_TIMESTAMP == value_type or
+      cassandra.TYPES.VALUE_TYPE_TIME == value_type
+   then
+      return stmt:bind_int64(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_BLOB == value_type or
+      cassandra.TYPES.VALUE_TYPE_VARINT == value_type
+   then
+      return stmt:bind_bytes(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_BOOLEAN == value_type then
+      return stmt:bind_bool(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_DATE == value_type then
+      return stmt:bind_uint32(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_DECIMAL == value_type then
+      return stmt:bind_decimal(ndx, value.number, value.scale)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_DOUBLE == value_type then
+      return stmt:bind_double(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_FLOAT == value_type then
+      return stmt:bind_float(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_INET == value_type then
+      return stmt:bind_inet(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_INT == value_type then
+      return stmt:bind_int32(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_TINYINT == value_type then
+      return stmt:bind_int8(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_SMALLINT == value_type then
+      return stmt:bind_int16(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_UUID == value_type or
+      cassandra.TYPES.VALUE_TYPE_TIMEUUID == value_type
+   then
+      return stmt:bind_uuid(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_LIST == value_type or
+      cassandra.TYPES.VALUE_TYPE_SET == value_type or
+      cassandra.TYPES.VALUE_TYPE_MAP == value_type
+   then
+      return stmt:bind_collection(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_UDT == value_type then
+      return stmt:bind_user_type(ndx, value)
+   end
+
+   if cassandra.TYPES.VALUE_TYPE_TUPLE == value_type then
+      return stmt:bind_tuple(ndx, value)
+   end
+
+   return cassandra.ERRORS.LIB_INVALID_VALUE_TYPE
+end
+
 function CassandraDB:inner_execute(query, args, query_options)
    local stmt = nil
    if query_options.prepare then
@@ -428,14 +514,20 @@ function CassandraDB:inner_execute(query, args, query_options)
       end
 
       stmt = prepared:bind()
-      -- TODO bind args
+      for i in 0, #args - 1 do
+	 local dt = prepared:parameter_data_type(i)
+	 if nil == dt then
+	    -- TODO
+	 end
+	 bind_value_to_stmt(stmt, args[i+1], dt:type(), i)
+      end
    else
       stmt = cassandra.cass_statement_new(query, 0)
       -- TODO
       stmt:set_keyspace(...)
    end
-
-   local rc = stmt:set_consistency()
+   -- TODO: query_options.consistency to cassandra.CL.consistency
+   local rc = stmt:set_consistency(query_options.consistency and query_options.consistency or cassandra.CL.ONE)
    if 0 ~= rc then
       return nil, cassandra.cass_error_desc(rc)
    end
@@ -499,7 +591,7 @@ function CassandraDB:inner_execute(query, args, query_options)
       rows[#rows + 1] = row
    end
 
-   return rows
+   return rows, nil
 end
 
 function CassandraDB:session_execute(query, args, query_options)
@@ -509,7 +601,7 @@ function CassandraDB:session_execute(query, args, query_options)
       return nil, "query must be a string"
    end
 
-   if query_options.auto_paging then
+   if query_options and query_options.auto_paging then
       return self:page_iterator(query, args, query_options)
    end
 
