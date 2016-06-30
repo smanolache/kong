@@ -4,7 +4,6 @@ local utils = require "kong.tools.utils"
 local timestamp = require "kong.tools.timestamp"
 local uuid = require "lua_uuid"
 local Errors = require "kong.dao.errors"
-local posix = require "posix"
 
 local CassBinaryDB = BaseDB:extend()
 
@@ -341,7 +340,7 @@ local function cleanup_db(local_cluster, local_session, obj_cluster, obj_session
    if local_cluster ~= obj_cluster then
       local_cluster = nil
    end
-   collectgarbage()
+--   collectgarbage()
    return nil
 end
 
@@ -868,60 +867,51 @@ local function get_select_query(table_name, where, select_clause)
   return query
 end
 
+local prepared_cache = {}
 local function get_prepared_from_cache(query)
-   return nil
+   return prepared_cache[query]
 end
 
 local function set_prepared_into_cache(query, prepared)
+   prepared_cache[query] = prepared
 end
 
--- should never be called with nil opts
--- opts.page_size
--- opts.consistency
--- opts.prepare
-local function full_query_impl(sess, query, args, opts, paging_state)
-   io.stderr:write("full_query_impl: ", query, "\n")
-   local stmt = nil
-   local just_prepared = false
-   if opts.prepare then
-      local prepared = get_prepared_from_cache(query)
-      if nil == prepared then
-	 local future = sess:prepare(query)
-	 future:wait()
-	 local rc = future:error_code()
-	 if 0 ~= rc then
-	    return nil, db.cass_error_desc(rc)
-	 end
-	 prepared = future:get_prepared()
-	 if nil == prepared then
-	    return nil, "cannot get a prepared object from future: probably oom"
-	 end
-	 set_prepared_into_cache(query, prepared)
-	 just_prepared = true
+local function bind_args(prepared, args)
+   local stmt = prepared:bind()
+   if nil == stmt then
+      return nil, "cannot get a statement from a prepared object: probably oom"
+   end
+   if nil == args then
+      return stmt, nil
+   end
+   for i = 1, #args do
+      local dt = prepared:parameter_data_type(i-1)
+      if nil == dt then
+	 return nil, query..": more arguments than unbound variables"
       end
-      stmt = prepared:bind()
-      if nil == stmt then
-	 return nil, "cannot get a statement from a prepared object: probably oom"
-      end
-      if nil ~= args then
-	 for i = 1, #args do
-	    local dt = prepared:parameter_data_type(i-1)
-	    if nil == dt then
-	       return nil, query..": more arguments than unbound variables"
-	    end
-	    local rc = bind_value_to_stmt(stmt, args[i], dt:type(), i-1)
-	    if 0 ~= rc then
-	       return nil, db.cass_error_desc(rc)
-	    end
-	 end
-      end
-   else
-      stmt = db.cass_statement_new(query, 0)
-      if nil == stmt then
-	 return nil, "cannot get a statement from a prepared object: probably oom"
+      local rc = bind_value_to_stmt(stmt, args[i], dt:type(), i-1)
+      if 0 ~= rc then
+	 return nil, db.cass_error_desc(rc)
       end
    end
+   return stmt, nil
+end
 
+local function prepare(sess, query)
+   local future = sess:prepare(query)
+   future:wait()
+   local rc = future:error_code()
+   if 0 ~= rc then
+      return nil, db.cass_error_desc(rc)
+   end
+   local prepared = future:get_prepared()
+   if nil == prepared then
+      return nil, "cannot get a prepared object from future: probably oom"
+   end
+   return prepared, nil
+end
+
+local function attempt_stmt_execution(sess, stmt, opts, paging_state)
    if paging_state and "" ~= paging_state then
       local rc = stmt:set_paging_state_token(paging_state, opts.page_size or 50)
       if 0 ~= rc then
@@ -939,16 +929,82 @@ local function full_query_impl(sess, query, args, opts, paging_state)
       return nil, "cannot get future from session:execute: probably oom"
    end
    future:wait()
-   rc = future:error_code()
+   return future, nil
+end
+
+local function exec_stmt(sess, stmt, opts, paging_state)
+   local future, err = attempt_stmt_execution(sess, stmt, opts, paging_state)
+   if err then
+      return nil, err
+   end
+   local rc = future:error_code()
+   if 0 ~= rc then
+      return nil, db.cass_error_desc(rc)
+   end
+
+   local result = future:get_result()
+   if nil == result then
+      return nil, "nil result from future: probably oom"      
+   end
+
+   return result, nil
+end
+
+-- should never be called with nil opts
+-- opts.page_size
+-- opts.consistency
+-- opts.prepare
+local function full_query_impl(sess, query, args, opts, paging_state)
+--   io.stderr:write("full_query_impl: ", query, "\n")
+   local stmt = nil
+   local just_prepared = false
+   if opts.prepare then
+      local prepared = get_prepared_from_cache(query)
+      if nil == prepared then
+	 local err
+	 prepared, err = prepare(sess, query)
+	 if err then
+	    return nil, err
+	 end
+	 set_prepared_into_cache(query, prepared)
+	 just_prepared = true
+      end
+      local err
+      stmt, err = bind_args(prepared, args)
+      if err then
+	 return nil, err
+      end
+   else
+      stmt = db.cass_statement_new(query, 0)
+      if nil == stmt then
+	 return nil, "cannot get a statement from a prepared object: probably oom"
+      end
+   end
+
+   local future, err = attempt_stmt_execution(sess, stmt, opts, paging_state)
+   if err then
+      return nil, err
+   end
+
+   local rc = future:error_code()
    if db.ERRORS.SERVER_UNPREPARED == rc then
       if not opts.prepare or just_prepared then
 	 return nil, db.cass_error_desc(rc)
       end
-      io.stderr:write("unprepared but not just prepared\n")
-    -- TODO
+      local prepared, err = prepare(sess, query)
+      if err then
+	 return nil, err
+      end
+      set_prepared_into_cache(query, prepared)
+      stmt, err = bind_args(prepared, args)
+      if err then
+	 return nil, err
+      end
+      return exec_stmt(sess, stmt, opts, paging_state)
    elseif 0 ~= rc then
       return nil, db.cass_error_desc(rc)
    end
+
    local result = future:get_result()
    if nil == result then
       return nil, "nil result from future: probably oom"      
@@ -1031,7 +1087,7 @@ end
 -- may be called with nil opts
 -- but is should call its callees with non-nil opts
 function CassBinaryDB:query(query, args, opts, schema, no_keyspace)
-   io.stderr:write("query"..query.."\n")
+--   io.stderr:write("query"..query.."\n")
    local conn_opts = self:_get_conn_options()
    local c, sess, err = init_db(conn_opts, no_keyspace)
    if err then
@@ -1061,7 +1117,7 @@ local function find_impl(sess, opts, table_name, schema, filter_keys)
 end
 
 function CassBinaryDB:find(table_name, schema, filter_keys)
-   io.stderr:write("find\n")
+--   io.stderr:write("find\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1086,7 +1142,7 @@ local function find_all_impl(sess, opts, table_name, tbl, schema)
 end
 
 function CassBinaryDB:find_all(table_name, tbl, schema)
-   io.stderr:write("find_all\n")
+--   io.stderr:write("find_all\n")
 
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
@@ -1125,7 +1181,7 @@ local function find_page_impl(sess, opts, table_name, tbl, paging_state, schema)
 end
 
 function CassBinaryDB:find_page(table_name, tbl, paging_state, page_size, schema)
-   io.stderr:write("find_page\n")
+--   io.stderr:write("find_page\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1235,7 +1291,7 @@ end
 
 -- may be called with nil options but it must call its callees with non-nil opts
 function CassBinaryDB:insert(table_name, schema, model, constraints, opts)
-   io.stderr:write("insert\n")
+--   io.stderr:write("insert\n")
    local conn_opts = self:_get_conn_options()
    local c, sess, err = init_db(conn_opts)
    if err then
@@ -1313,7 +1369,7 @@ end
 
 -- may be called with nil options but it must call its callees with non-nil opts
 function CassBinaryDB:update(table_name, schema, constraints, filter_keys, values, nils, full, model, opts)
-   io.stderr:write("update\n")
+--   io.stderr:write("update\n")
    local conn_opts = self:_get_conn_options()
    local c, sess, err = init_db(conn_opts)
    if err then
@@ -1345,7 +1401,7 @@ local function count_impl(sess, opts, table_name, tbl, schema)
 end
 
 function CassBinaryDB:count(table_name, tbl, schema)
-   io.stderr:write("count\n")
+--   io.stderr:write("count\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1407,7 +1463,7 @@ local delete_impl = function(sess, opts, table_name, schema, primary_keys, const
 end
 
 function CassBinaryDB:delete(table_name, schema, primary_keys, constraints)
-   io.stderr:write("delete\n")
+--   io.stderr:write("delete\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1435,7 +1491,7 @@ local function queries_impl(sess, opts, queries)
 end
 
 function CassBinaryDB:queries(queries, no_keyspace)
-   io.stderr:write("queries\n")
+--   io.stderr:write("queries\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts, no_keyspace)
    if err then
@@ -1450,7 +1506,7 @@ function CassBinaryDB:queries(queries, no_keyspace)
 end
 
 function CassBinaryDB:drop_table(table_name)
-   io.stderr:write("drop_table\n")
+--   io.stderr:write("drop_table\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1465,7 +1521,7 @@ function CassBinaryDB:drop_table(table_name)
 end
 
 function CassBinaryDB:truncate_table(table_name)
-   io.stderr:write("truncate_table\n")
+--   io.stderr:write("truncate_table\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
    if err then
@@ -1507,7 +1563,7 @@ local function current_migrations_impl(sess, opts)
 end
 
 function CassBinaryDB:current_migrations()
-   io.stderr:write("current_migrations\n")
+--   io.stderr:write("current_migrations\n")
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts, true)
    if err then
@@ -1541,7 +1597,7 @@ local function record_migration_impl(sess, opts, id, name)
 end
 
 function CassBinaryDB:record_migration(id, name)
-   io.stderr:write("record_migration\n")
+--   io.stderr:write("record_migration\n")
 
    local opts = self:_get_conn_options()
    local c, sess, err = init_db(opts)
